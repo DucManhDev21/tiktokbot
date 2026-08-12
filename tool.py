@@ -62,7 +62,7 @@ def parse_cookie(cookie_raw):
     return cookies
 
 
-# Khởi tạo dữ liệu
+# Khởi tạo cấu hình
 config = load_config()
 client = genai.Client(api_key=config["GEMINI_API_KEY"])
 cookies = parse_cookie(config["COOKIE"])
@@ -76,14 +76,25 @@ def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
     try:
         chat_url = f"https://www.tiktok.com/messages?lang=vi&nickname={target_username}"
         print(f"🔄 Đang truy cập khung chat với ID: @{target_username}...")
-        
-        # Tăng timeout và dùng wait_until domcontentloaded để ổn định hơn
-        page.goto(chat_url, timeout=60000, wait_until="domcontentloaded")
-        time.sleep(5)
+
+        # Chờ mạng tải xong hoàn toàn
+        page.goto(chat_url, timeout=60000, wait_until="networkidle")
+        time.sleep(8)
+
+        # Kiểm tra nếu TikTok bắt đăng nhập lại do phát hiện IP lạ
+        if "login" in page.url:
+            print(f"❌ TikTok chuyển hướng về trang đăng nhập đối với ID: @{target_username} (Do IP/Cookie bị từ chối)")
+            return
 
         chat_input = page.locator('div[contenteditable="true"]').first
-        if not chat_input.is_visible(timeout=10000):
-            print(f"⚠️ Không mở được khung chat hoặc không tìm thấy ô nhập tin nhắn với ID: @{target_username}")
+
+        # Nếu chưa tìm thấy ô chat, giả lập nhấp chuột vào giữa màn hình để tương tác
+        if not chat_input.is_visible():
+            page.mouse.click(400, 300)
+            time.sleep(3)
+
+        if not chat_input.is_visible():
+            print(f"⚠️ Không mở được khung chat hoặc bị vướng Captcha với ID: @{target_username}")
             return
 
         if prompt_type == "session":
@@ -127,8 +138,7 @@ def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
 def send_tiktok_messages_all(prompt_type, custom_prompt=""):
     with sync_playwright() as p:
         chromium_path = shutil.which("chromium-browser") or shutil.which("chromium")
-        
-        # Cấu hình cờ Chromium ổn định, loại bỏ cờ ép RAM quá đà
+
         launch_args = {
             "headless": True,
             "args": [
@@ -143,11 +153,13 @@ def send_tiktok_messages_all(prompt_type, custom_prompt=""):
             launch_args["executable_path"] = chromium_path
 
         browser = p.chromium.launch(**launch_args)
-        
-        # Giả lập môi trường trình duyệt Chrome thật trên máy tính
+
+        # Giả lập đầy đủ thông số trình duyệt người dùng Việt Nam
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 720}
+            viewport={"width": 1280, "height": 720},
+            locale="vi-VN",
+            timezone_id="Asia/Ho_Chi_Minh",
         )
         context.add_cookies(cookies)
 
@@ -165,7 +177,7 @@ def send_tiktok_messages_all(prompt_type, custom_prompt=""):
         browser.close()
 
 
-# --- 4. THỰC THI CHẠY 1 LẦN DÙNG CHO GITHUB ACTIONS ---
+# --- 4. THỰC THI CHẠY 1 LẦN ---
 if __name__ == "__main__":
     current_hour = datetime.now().hour
 
@@ -181,3 +193,4 @@ if __name__ == "__main__":
     else:
         print("🤖 Kích hoạt lịch: Kiểm tra & tự động trả lời tin nhắn")
         send_tiktok_messages_all("auto_reply")
+            
