@@ -62,7 +62,7 @@ def parse_cookie(cookie_raw):
     return cookies
 
 
-# Khởi tạo cấu hình trực tiếp từ config.json
+# Khởi tạo dữ liệu
 config = load_config()
 client = genai.Client(api_key=config["GEMINI_API_KEY"])
 cookies = parse_cookie(config["COOKIE"])
@@ -75,12 +75,15 @@ TARGET_USERS = [
 def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
     try:
         chat_url = f"https://www.tiktok.com/messages?lang=vi&nickname={target_username}"
+        print(f"🔄 Đang truy cập khung chat với ID: @{target_username}...")
+        
+        # Tăng timeout và dùng wait_until domcontentloaded để ổn định hơn
         page.goto(chat_url, timeout=60000, wait_until="domcontentloaded")
-        time.sleep(3)
+        time.sleep(5)
 
         chat_input = page.locator('div[contenteditable="true"]').first
-        if not chat_input.is_visible():
-            print(f"⚠️ Không mở được khung chat với ID: @{target_username}")
+        if not chat_input.is_visible(timeout=10000):
+            print(f"⚠️ Không mở được khung chat hoặc không tìm thấy ô nhập tin nhắn với ID: @{target_username}")
             return
 
         if prompt_type == "session":
@@ -101,6 +104,7 @@ def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
             messages = page.locator('div[data-e2e="chat-item"]').all_text_contents()
             if messages:
                 last_user_msg = messages[-1]
+                print(f"📩 Tin nhắn mới nhất nhận được từ [@{target_username}]: {last_user_msg}")
 
                 prompt = f"Trả lời ngắn gọn, tự nhiên cho tin nhắn này: '{last_user_msg}'"
                 response = client.models.generate_content(
@@ -112,6 +116,8 @@ def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
                 chat_input.fill(ai_reply)
                 page.keyboard.press("Enter")
                 print(f"🤖 Đã tự động trả lời [@{target_username}]: {ai_reply}")
+            else:
+                print(f"ℹ️ Chưa có tin nhắn mới nào từ [@{target_username}]")
 
     except Exception as e:
         print(f"❌ Lỗi khi xử lý ID [@{target_username}]: {e}")
@@ -121,38 +127,36 @@ def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
 def send_tiktok_messages_all(prompt_type, custom_prompt=""):
     with sync_playwright() as p:
         chromium_path = shutil.which("chromium-browser") or shutil.which("chromium")
-
-        minimal_args = [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-accelerated-2d-canvas",
-            "--no-first-run",
-            "--no-zygote",
-            "--single-process",
-            "--disable-gpu",
-            "--mute-audio",
-            "--disable-extensions",
-        ]
-
+        
+        # Cấu hình cờ Chromium ổn định, loại bỏ cờ ép RAM quá đà
         launch_args = {
             "headless": True,
-            "args": minimal_args,
+            "args": [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--mute-audio",
+            ],
         }
         if chromium_path:
             launch_args["executable_path"] = chromium_path
 
         browser = p.chromium.launch(**launch_args)
-        context = browser.new_context(viewport={"width": 800, "height": 600})
+        
+        # Giả lập môi trường trình duyệt Chrome thật trên máy tính
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720}
+        )
         context.add_cookies(cookies)
 
         page = context.new_page()
-        page.route("**/*.{png,jpg,jpeg,svg,webp,mp4,mp3}", lambda route: route.abort())
 
         try:
             for username in TARGET_USERS:
                 process_user_chat(page, username, prompt_type, custom_prompt)
-                time.sleep(2)
+                time.sleep(3)
         except Exception as e:
             print(f"❌ Lỗi kết nối TikTok: {e}")
 
@@ -161,20 +165,19 @@ def send_tiktok_messages_all(prompt_type, custom_prompt=""):
         browser.close()
 
 
-# --- 4. THỰC THI THEO THỜI GIAN (CHẠY 1 LẦN) ---
+# --- 4. THỰC THI CHẠY 1 LẦN DÙNG CHO GITHUB ACTIONS ---
 if __name__ == "__main__":
     current_hour = datetime.now().hour
 
-    # Quyết định chế độ gửi dựa trên giờ hệ thống
     if current_hour == 8:
-        print("🌅 Chạy lịch: Gửi tin nhắn buổi sáng")
+        print("🌅 Kích hoạt lịch: Gửi tin nhắn buổi sáng")
         send_tiktok_messages_all("session", "buổi sáng")
     elif current_hour == 12:
-        print("☀️ Chạy lịch: Gửi tin nhắn buổi trưa")
+        print("☀️ Kích hoạt lịch: Gửi tin nhắn buổi trưa")
         send_tiktok_messages_all("session", "buổi trưa")
     elif current_hour == 19:
-        print("🌙 Chạy lịch: Gửi tin nhắn buổi tối")
+        print("🌙 Kích hoạt lịch: Gửi tin nhắn buổi tối")
         send_tiktok_messages_all("session", "buổi tối")
     else:
-        print("🤖 Chạy lịch: Tự động kiểm tra & trả lời tin nhắn")
+        print("🤖 Kích hoạt lịch: Kiểm tra & tự động trả lời tin nhắn")
         send_tiktok_messages_all("auto_reply")
