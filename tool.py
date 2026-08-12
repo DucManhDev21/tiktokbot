@@ -6,7 +6,6 @@ import time
 from datetime import datetime
 from google import genai
 from playwright.sync_api import sync_playwright
-import schedule
 
 CONFIG_FILE = "config.json"
 
@@ -63,6 +62,7 @@ def parse_cookie(cookie_raw):
     return cookies
 
 
+# Khởi tạo cấu hình trực tiếp từ config.json
 config = load_config()
 client = genai.Client(api_key=config["GEMINI_API_KEY"])
 cookies = parse_cookie(config["COOKIE"])
@@ -117,12 +117,11 @@ def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
         print(f"❌ Lỗi khi xử lý ID [@{target_username}]: {e}")
 
 
-# --- 3. HÀM TỔNG DUYỆT TẤT CẢ USER (CẤU HÌNH TIẾT KIỆM RAM) ---
+# --- 3. HÀM TỔNG DUYỆT TẤT CẢ USER ---
 def send_tiktok_messages_all(prompt_type, custom_prompt=""):
     with sync_playwright() as p:
         chromium_path = shutil.which("chromium-browser") or shutil.which("chromium")
-        
-        # Các cờ ép Chromium tiêu tốn ít RAM nhất có thể
+
         minimal_args = [
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -130,10 +129,10 @@ def send_tiktok_messages_all(prompt_type, custom_prompt=""):
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
             "--no-zygote",
-            "--single-process",  # Chạy đơn tiến trình
-            "--disable-gpu",     # Tắt đồ họa GPU
-            "--mute-audio",      # Tắt âm thanh
-            "--disable-extensions", # Tắt tiện ích mở rộng
+            "--single-process",
+            "--disable-gpu",
+            "--mute-audio",
+            "--disable-extensions",
         ]
 
         launch_args = {
@@ -144,11 +143,9 @@ def send_tiktok_messages_all(prompt_type, custom_prompt=""):
             launch_args["executable_path"] = chromium_path
 
         browser = p.chromium.launch(**launch_args)
-        
-        # Chặn tải hình ảnh/media không cần thiết để giảm ngốn RAM
         context = browser.new_context(viewport={"width": 800, "height": 600})
         context.add_cookies(cookies)
-        
+
         page = context.new_page()
         page.route("**/*.{png,jpg,jpeg,svg,webp,mp4,mp3}", lambda route: route.abort())
 
@@ -159,24 +156,25 @@ def send_tiktok_messages_all(prompt_type, custom_prompt=""):
         except Exception as e:
             print(f"❌ Lỗi kết nối TikTok: {e}")
 
-        # Đóng toàn bộ tab và trình duyệt để giải phóng RAM giải mã
         page.close()
         context.close()
         browser.close()
 
 
-# --- 4. ĐẶT LỊCH GỬI ---
-schedule.every().day.at("08:00").do(send_tiktok_messages_all, "session", "buổi sáng")
-schedule.every().day.at("12:00").do(send_tiktok_messages_all, "session", "buổi trưa")
-schedule.every().day.at("19:00").do(send_tiktok_messages_all, "session", "buổi tối")
+# --- 4. THỰC THI THEO THỜI GIAN (CHẠY 1 LẦN) ---
+if __name__ == "__main__":
+    current_hour = datetime.now().hour
 
-print(
-    f"🚀 Tool (bản tối ưu RAM) tự động chạy cho danh sách ID: {TARGET_USERS}"
-)
-
-# --- 5. VÒNG LẶP CHẠY LIÊN TỤC ---
-while True:
-    schedule.run_pending()
-    send_tiktok_messages_all("auto_reply")
-    time.sleep(300)
-            
+    # Quyết định chế độ gửi dựa trên giờ hệ thống
+    if current_hour == 8:
+        print("🌅 Chạy lịch: Gửi tin nhắn buổi sáng")
+        send_tiktok_messages_all("session", "buổi sáng")
+    elif current_hour == 12:
+        print("☀️ Chạy lịch: Gửi tin nhắn buổi trưa")
+        send_tiktok_messages_all("session", "buổi trưa")
+    elif current_hour == 19:
+        print("🌙 Chạy lịch: Gửi tin nhắn buổi tối")
+        send_tiktok_messages_all("session", "buổi tối")
+    else:
+        print("🤖 Chạy lịch: Tự động kiểm tra & trả lời tin nhắn")
+        send_tiktok_messages_all("auto_reply")
