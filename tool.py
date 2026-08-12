@@ -20,7 +20,6 @@ def load_config():
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    # Kiểm tra thiếu dữ liệu
     missing_fields = []
     if not config.get("GEMINI_API_KEY"):
         missing_fields.append("GEMINI_API_KEY")
@@ -38,7 +37,6 @@ def load_config():
 
 def parse_cookie(cookie_raw):
     cookies = []
-    # Xử lý nếu dán dạng JSON
     if cookie_raw.strip().startswith("["):
         try:
             items = json.loads(cookie_raw)
@@ -53,7 +51,6 @@ def parse_cookie(cookie_raw):
         except Exception:
             pass
 
-    # Xử lý dạng Header string (key=value; key2=value2)
     for item in cookie_raw.split(";"):
         if "=" in item:
             name, value = item.strip().split("=", 1)
@@ -66,7 +63,6 @@ def parse_cookie(cookie_raw):
     return cookies
 
 
-# Khởi tạo dữ liệu trực tiếp từ config
 config = load_config()
 client = genai.Client(api_key=config["GEMINI_API_KEY"])
 cookies = parse_cookie(config["COOKIE"])
@@ -79,15 +75,14 @@ TARGET_USERS = [
 def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
     try:
         chat_url = f"https://www.tiktok.com/messages?lang=vi&nickname={target_username}"
-        page.goto(chat_url, timeout=60000)
-        time.sleep(4)
+        page.goto(chat_url, timeout=60000, wait_until="domcontentloaded")
+        time.sleep(3)
 
         chat_input = page.locator('div[contenteditable="true"]').first
         if not chat_input.is_visible():
             print(f"⚠️ Không mở được khung chat với ID: @{target_username}")
             return
 
-        # Trường hợp 1: Tự động gửi tin nhắn chào theo Buổi
         if prompt_type == "session":
             prompt = f"Viết 1 tin nhắn ngắn (dưới 15 từ) gửi bạn bè/người yêu vào {custom_prompt}, phong cách đáng yêu, thân thiện."
             response = client.models.generate_content(
@@ -102,7 +97,6 @@ def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
                 f"[{datetime.now().strftime('%H:%M')}] ✅ Đã gửi tin {custom_prompt} tới [@{target_username}]: {msg_to_send}"
             )
 
-        # Trường hợp 2: Lắng nghe và Tự trả lời tin nhắn
         elif prompt_type == "auto_reply":
             messages = page.locator('div[data-e2e="chat-item"]').all_text_contents()
             if messages:
@@ -123,21 +117,40 @@ def process_user_chat(page, target_username, prompt_type, custom_prompt=""):
         print(f"❌ Lỗi khi xử lý ID [@{target_username}]: {e}")
 
 
-# --- 3. HÀM TỔNG DUYỆT TẤT CẢ USER ---
+# --- 3. HÀM TỔNG DUYỆT TẤT CẢ USER (CẤU HÌNH TIẾT KIỆM RAM) ---
 def send_tiktok_messages_all(prompt_type, custom_prompt=""):
     with sync_playwright() as p:
         chromium_path = shutil.which("chromium-browser") or shutil.which("chromium")
+        
+        # Các cờ ép Chromium tiêu tốn ít RAM nhất có thể
+        minimal_args = [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--single-process",  # Chạy đơn tiến trình
+            "--disable-gpu",     # Tắt đồ họa GPU
+            "--mute-audio",      # Tắt âm thanh
+            "--disable-extensions", # Tắt tiện ích mở rộng
+        ]
+
         launch_args = {
             "headless": True,
-            "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+            "args": minimal_args,
         }
         if chromium_path:
             launch_args["executable_path"] = chromium_path
 
         browser = p.chromium.launch(**launch_args)
-        context = browser.new_context()
+        
+        # Chặn tải hình ảnh/media không cần thiết để giảm ngốn RAM
+        context = browser.new_context(viewport={"width": 800, "height": 600})
         context.add_cookies(cookies)
+        
         page = context.new_page()
+        page.route("**/*.{png,jpg,jpeg,svg,webp,mp4,mp3}", lambda route: route.abort())
 
         try:
             for username in TARGET_USERS:
@@ -146,6 +159,9 @@ def send_tiktok_messages_all(prompt_type, custom_prompt=""):
         except Exception as e:
             print(f"❌ Lỗi kết nối TikTok: {e}")
 
+        # Đóng toàn bộ tab và trình duyệt để giải phóng RAM giải mã
+        page.close()
+        context.close()
         browser.close()
 
 
@@ -155,7 +171,7 @@ schedule.every().day.at("12:00").do(send_tiktok_messages_all, "session", "buổi
 schedule.every().day.at("19:00").do(send_tiktok_messages_all, "session", "buổi tối")
 
 print(
-    f"🚀 Tool tự động khởi chạy thành công cho danh sách ID: {TARGET_USERS}"
+    f"🚀 Tool (bản tối ưu RAM) tự động chạy cho danh sách ID: {TARGET_USERS}"
 )
 
 # --- 5. VÒNG LẶP CHẠY LIÊN TỤC ---
@@ -163,4 +179,4 @@ while True:
     schedule.run_pending()
     send_tiktok_messages_all("auto_reply")
     time.sleep(300)
-          
+            
